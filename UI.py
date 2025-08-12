@@ -38,11 +38,55 @@ except ModuleNotFoundError:
 from utils import normalize_txt, safe_int_convert, parse_month_with_fallback
 from reg_anal import reg_anal
 
-st.set_page_config(page_title="Niamah Sales Forecast (نعمة للتنبؤ بالمبيعات)", layout="wide")
+# Import Babel for Arabic number formatting
+try:
+    from babel.numbers import format_decimal
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "Babel"])
+    from babel.numbers import format_decimal
 
-# Title with bilingual support
-st.title("Niamah Sales Forecast (نعمة للتنبؤ بالمبيعات)")
-st.markdown("*Poisson GLM-based forecasting for branch-product sales*")
+# Arabic number formatting helper
+def fmt_num(x):
+    try:
+        x = float(x)
+        if abs(x) < 1:
+            return format_decimal(round(x, 1), locale='ar')  # e.g., ٠٫٨
+        return format_decimal(int(round(x)), locale='ar')   # integers with Arabic digits and grouping
+    except Exception:
+        return str(x)
+
+# Global column header translation mapping
+COLUMN_TRANSLATIONS = {
+    "Branch": "الفرع",
+    "Description": "الوصف", 
+    "Month": "الشهر",
+    "Month ": "الشهر",  # Handle the space variant
+    "Qty": "الكمية"
+}
+
+def translate_columns(df):
+    """Translate DataFrame column headers to Arabic while keeping data unchanged."""
+    df_display = df.copy()
+    df_display.columns = [COLUMN_TRANSLATIONS.get(col, col) for col in df_display.columns]
+    return df_display
+
+st.set_page_config(page_title="منصّة التنبؤ بالمبيعات", layout="wide")
+
+# Inject CSS for RTL and Arabic font
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;600;700&display=swap');
+html, body, [class*="css"]  {
+    font-family: 'Tajawal', sans-serif !important;
+    direction: rtl;
+    text-align: right;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Title with Arabic-only support
+st.title("منصّة التنبؤ بالمبيعات")
 
 # Initialize session state
 if 'selected_branch' not in st.session_state:
@@ -162,9 +206,9 @@ def filter_products_by_search(products: List[str], search_term: str) -> List[str
     return filtered
 
 # Sidebar: Data source
-st.sidebar.header("Data (البيانات)")
-use_bundled = st.sidebar.checkbox("Use bundled niamah_sales.csv (استخدام الملف المرفق)", value=True)
-uploaded = None if use_bundled else st.sidebar.file_uploader("Upload CSV (رفع ملف)", type=["csv"])
+st.sidebar.header("البيانات")
+use_bundled = st.sidebar.checkbox("استخدام الملف المرفق (niamah_sales.csv)", value=True)
+uploaded = None if use_bundled else st.sidebar.file_uploader("رفع ملف CSV", type=["csv"])
 
 # Determine data path
 if use_bundled:
@@ -174,22 +218,22 @@ if use_bundled:
         st.stop()
 else:
     if uploaded is None:
-        st.info("Upload your CSV or enable 'Use bundled niamah_sales.csv'.")
+        st.info("ارفع ملف CSV أو فعّل 'استخدام الملف المرفق'.")
         st.stop()
     with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
         tmp.write(uploaded.getvalue())
         data_path = tmp.name
 
 # Load and clean data
-with st.spinner("Loading and cleaning data... (تحميل وتنظيف البيانات...)"):
+with st.spinner("تحميل وتنظيف البيانات..."):
     df_clean, diagnostics = load_and_clean_data(data_path)
 
 if df_clean.empty:
-    st.error("No valid data found after cleaning. Please check your CSV format.")
+    st.error("لم يتم العثور على بيانات صالحة بعد التنظيف. يرجى التحقق من تنسيق ملف CSV.")
     st.stop()
 
 # Branch selection
-st.subheader("Branch Selection (اختيار الفرع)")
+st.subheader("اختيار الفرع")
 branches = sorted(df_clean['Branch'].unique().tolist())
 branch_index = 0
 
@@ -201,7 +245,7 @@ if st.session_state.selected_branch is not None:
         branch_index = 0
 
 selected_branch = st.selectbox(
-    "Branch (الفرع)", 
+    "الفرع", 
     branches, 
     index=branch_index,
     key="branch_selector"
@@ -215,20 +259,20 @@ if selected_branch != st.session_state.selected_branch:
     st.rerun()
 
 # Product selection with search
-st.subheader("Product Selection (اختيار المنتج)")
+st.subheader("اختيار المنتج")
 
 # Get products for selected branch
 available_products = get_branch_products(df_clean, selected_branch)
 
 if not available_products:
-    st.warning(f"No products found for branch: {selected_branch}")
+    st.warning(f"لم يتم العثور على منتجات للفرع: {selected_branch}")
     st.stop()
 
 # Search box
 search_term = st.text_input(
-    "Search product (ابحث عن منتج)", 
+    "ابحث عن منتج", 
     value=st.session_state.product_search,
-    placeholder="Type part of product name... (اكتب جزء من اسم المنتج...)",
+    placeholder="اكتب جزءًا من اسم المنتج…",
     key="product_search_input"
 )
 
@@ -240,8 +284,8 @@ if search_term != st.session_state.product_search:
 filtered_products = filter_products_by_search(available_products, search_term)
 
 if not filtered_products:
-    st.warning(f"No products match search term: '{search_term}'")
-    st.info(f"Available products count: {len(available_products)}")
+    st.warning(f"لا توجد منتجات تطابق مصطلح البحث: '{search_term}'")
+    st.info(f"عدد المنتجات المتاحة: {fmt_num(len(available_products))}")
     st.stop()
 
 # Product selection
@@ -254,7 +298,7 @@ if (st.session_state.selected_product is not None and
         product_index = 0
 
 selected_product = st.selectbox(
-    f"Product (Description) (المنتج - الوصف) - {len(filtered_products)} matches",
+    f"المنتج (الوصف) — عدد المطابقات: {fmt_num(len(filtered_products))}",
     filtered_products,
     index=product_index,
     key="product_selector"
@@ -269,50 +313,50 @@ df_filtered = df_clean[
 ].copy()
 
 if df_filtered.empty:
-    st.error("No data found for the selected Branch/Product combination.")
+    st.error("لم يتم العثور على بيانات لمجموعة الفرع/المنتج المحددة.")
     st.stop()
 
 # Display cleaned data
-st.subheader("Cleaned Data (model input) (البيانات المنظفة - مدخل النموذج)")
-st.dataframe(df_filtered, use_container_width=True)
+st.subheader("البيانات المنظّفة (مدخل النموذج)")
+st.dataframe(translate_columns(df_filtered), use_container_width=True)
 
 # Forecast range setup
 if df_filtered['Month '].isna().all():
-    st.error("No valid month data found after filtering.")
+    st.error("لم يتم العثور على بيانات شهرية صالحة بعد التصفية.")
     st.stop()
 
 try:
     m_last = int(df_filtered['Month '].dropna().max())
 except (ValueError, TypeError):
-    st.error("Invalid month data. Please check your CSV format.")
+    st.error("بيانات شهرية غير صالحة. يرجى التحقق من تنسيق ملف CSV.")
     st.stop()
 
 default_from = m_last + 1
 default_to = max(default_from, m_last + 2)
 
 # Forecast range inputs
-st.subheader("Forecast Range (نطاق التنبؤ)")
+st.subheader("نطاق التنبؤ")
 c3, c4 = st.columns(2)
 with c3:
     m_from = st.number_input(
-        "Forecast from (month offset) (التنبؤ من - إزاحة الشهر)", 
+        "التنبؤ من (إزاحة الشهر)", 
         min_value=0, 
         value=default_from, 
         step=1
     )
 with c4:
     m_to = st.number_input(
-        "Forecast to (month offset, inclusive) (التنبؤ إلى - إزاحة الشهر شاملة)", 
+        "التنبؤ إلى (إزاحة الشهر، شاملة)", 
         min_value=int(m_from), 
         value=int(max(default_to, m_from)), 
         step=1
     )
 
 # Run forecast
-run_forecast = st.button("🔮 Run Forecast (تنفيذ التنبؤ)", type="primary")
+run_forecast = st.button("تنفيذ التنبؤ", type="primary")
 
 if run_forecast:
-    with st.spinner("Running Poisson GLM forecast... (تشغيل نموذج التنبؤ...)"):
+    with st.spinner("تشغيل نموذج التنبؤ..."):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as img_tmp:
             img_path = img_tmp.name
         
@@ -321,33 +365,74 @@ if run_forecast:
             summary = reg_anal(df_filtered, [int(m_from), int(m_to)], img_path)
             
             # Display results
-            st.subheader("📊 Results (النتائج)")
-            st.table(summary)
+            st.subheader("النتائج")
             
             # Extract values for explanation
-            beta1 = summary.loc["Beta 1", "value"]
+            beta1 = float(summary.loc["Beta 1", "value"])
             conf = summary.loc["95% Confidence Interval", "value"]
             preds = summary.loc["Predicted Values", "value"]
             pred_int = summary.loc["Prediction Interval", "value"]
             
-            # Bilingual explanation
+            # Parse predictions for individual months
+            try:
+                pred_list = eval(str(preds)) if isinstance(preds, str) else preds
+                pred1 = float(pred_list[0]) if len(pred_list) > 0 else 0
+                pred2 = float(pred_list[1]) if len(pred_list) > 1 else 0
+            except:
+                pred1 = pred2 = 0
+            
+            # Parse prediction interval
+            try:
+                pi_parts = str(pred_int).replace('[', '').replace(']', '').split(',')
+                pi_low = float(pi_parts[0].strip())
+                pi_high = float(pi_parts[1].strip())
+            except:
+                pi_low = pi_high = 0
+            
+            # Determine trend
+            trend_word = "ارتفاع" if beta1 > 0 else "انخفاض"
+            trend_arrow = "⬆️" if beta1 > 0 else "⬇️"
+            
+            # Summary cards
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("الاتجاه العام", f"{trend_word} {trend_arrow}")
+            with col2:
+                st.metric("توقع الشهر القادم", fmt_num(pred1))
+            with col3:
+                st.metric("نطاق الثقة ٩٥٪ (إجمالي الفترة)", f"{fmt_num(pi_low)} – {fmt_num(pi_high)}")
+            
+            # Arabic summary
             st.info(
-                f"**English:** Predicted monthly change for {selected_product} at {selected_branch}: {beta1}. "
-                f"95% confidence interval for slope: {conf}. "
-                f"Predicted values for months [{int(m_from)}, {int(m_to)}]: {preds}. "
-                f"95% prediction interval for total: {pred_int}.\n\n"
-                f"**العربية:** التغيير الشهري المتوقع لـ {selected_product} في فرع {selected_branch}: {beta1}. "
-                f"فترة الثقة 95% للميل: {conf}. "
-                f"القيم المتوقعة للأشهر [{int(m_from)}, {int(m_to)}]: {preds}. "
-                f"فترة التنبؤ 95% للإجمالي: {pred_int}."
+                f"الخلاصة: الاتجاه **{trend_word}**. متوقع بيع {fmt_num(pred1)} وحدة في الشهر القادم، ثم {fmt_num(pred2)} وحدة بعده. "
+                f"نطاق الثقة ٩٥٪ لإجمالي الفترة: من {fmt_num(pi_low)} إلى {fmt_num(pi_high)}."
             )
             
+            # Optional advanced mode
+            adv = st.toggle("وضع متقدّم", value=False)
+            if adv:
+                # Format summary table with Arabic numbers
+                summary_formatted = summary.copy()
+                for idx in summary_formatted.index:
+                    val = summary_formatted.loc[idx, "value"]
+                    try:
+                        if isinstance(val, (int, float)):
+                            summary_formatted.loc[idx, "value"] = fmt_num(val)
+                        elif isinstance(val, str) and '[' in val:
+                            # Handle lists/intervals
+                            parts = val.replace('[', '').replace(']', '').split(',')
+                            formatted_parts = [fmt_num(float(p.strip())) for p in parts]
+                            summary_formatted.loc[idx, "value"] = '[' + ', '.join(formatted_parts) + ']'
+                    except:
+                        pass
+                st.table(translate_columns(summary_formatted))
+            
             # Display visualization
-            st.subheader("📈 Visualization (التصور)")
-            st.image(img_path, caption="Sales Trend & Forecast (Poisson GLM)", use_container_width=True)
+            st.subheader("التصور")
+            st.image(img_path, caption="اتجاه المبيعات والتوقّع", use_container_width=True)
             
             # Download buttons
-            st.subheader("💾 Downloads (التحميلات)")
+            st.subheader("التحميلات")
             col1, col2 = st.columns(2)
             
             with col1:
@@ -355,7 +440,7 @@ if run_forecast:
                 csv_buf = io.StringIO()
                 summary.to_csv(csv_buf)
                 st.download_button(
-                    "📄 Download summary.csv",
+                    "تنزيل الملخّص",
                     data=csv_buf.getvalue(),
                     file_name="summary.csv",
                     mime="text/csv"
@@ -365,7 +450,7 @@ if run_forecast:
                 # Image download
                 with open(img_path, "rb") as fh:
                     st.download_button(
-                        "🖼️ Download prediction.jpg",
+                        "تنزيل الرسم",
                         data=fh.read(),
                         file_name="prediction.jpg",
                         mime="image/jpeg"
