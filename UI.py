@@ -11,6 +11,28 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import streamlit as st
+from datetime import datetime
+import numpy as np
+
+# Arabic month names
+AR_MONTHS = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"]
+
+def offset_to_date(base_year:int, base_month:int, offset:int) -> datetime:
+    y = base_year + (base_month - 1 + offset) // 12
+    m = (base_month - 1 + offset) % 12 + 1
+    return datetime(y, m, 1)
+
+def date_to_ar_label(d: datetime) -> str:
+    return f"{AR_MONTHS[d.month-1]} {d.year}"
+
+def horizon_label(h: int) -> str:
+    if h == 1: return "الشهر القادم"
+    if h == 2: return "بعد شهرين"
+    return f"بعد {h} أشهر"
+
+def get_display_month(forecast_index: int) -> int:
+    """Convert forecast index to display month number (starting from 1 for next month)"""
+    return forecast_index + 1
 
 # Auto-install dependencies if missing
 try:
@@ -316,41 +338,82 @@ if df_filtered.empty:
     st.error("لم يتم العثور على بيانات لمجموعة الفرع/المنتج المحددة.")
     st.stop()
 
-# Display cleaned data
-st.subheader("البيانات المنظّفة (مدخل النموذج)")
-st.dataframe(translate_columns(df_filtered), use_container_width=True)
+# Add human-readable month labels
+BASE_YEAR, BASE_MONTH = 2024, 1
+df_filtered['الشهر (مقروء)'] = df_filtered['Month '].apply(
+    lambda off: date_to_ar_label(offset_to_date(BASE_YEAR, BASE_MONTH, int(off)))
+)
 
-# Forecast range setup
-if df_filtered['Month '].isna().all():
-    st.error("لم يتم العثور على بيانات شهرية صالحة بعد التصفية.")
-    st.stop()
+# Display filtered data with readable month column first
+st.subheader("البيانات المفلترة")
+if not df_filtered.empty:
+    # Reorder columns to show readable month first
+    cols = df_filtered.columns.tolist()
+    if 'الشهر (مقروء)' in cols:
+        cols.remove('الشهر (مقروء)')
+        cols.insert(0, 'الشهر (مقروء)')
+        df_display = df_filtered[cols]
+    else:
+        df_display = df_filtered
+    st.dataframe(df_display, use_container_width=True)
+    st.caption(f"عدد السجلات: {len(df_filtered)}")
+else:
+    st.warning("لا توجد بيانات تطابق المعايير المحددة.")
 
-try:
-    m_last = int(df_filtered['Month '].dropna().max())
-except (ValueError, TypeError):
-    st.error("بيانات شهرية غير صالحة. يرجى التحقق من تنسيق ملف CSV.")
-    st.stop()
+# Data Quality section - outlier detection
+st.subheader("جودة البيانات")
+use_outliers = st.toggle("كشف القيم الشاذة (IQR)", value=True)
+exclude_outliers = st.toggle("استبعاد القيم الشاذة من التنبؤ", value=False)
 
+def mark_outliers_iqr(s: pd.Series):
+    s2 = pd.to_numeric(s, errors='coerce').dropna()
+    if len(s2) < 4:
+        return pd.Series([False]*len(s), index=s.index), None, None
+    q1, q3 = s2.quantile(0.25), s2.quantile(0.75)
+    iqr = q3 - q1
+    lower, upper = q1 - 1.5*iqr, q3 + 1.5*iqr
+    flags = (s < lower) | (s > upper)
+    return flags.fillna(False), lower, upper
+
+if use_outliers:
+    flags, lower, upper = mark_outliers_iqr(df_filtered['Qty'])
+    if lower is not None:
+        st.caption(f"حدود IQR: أقل من {lower:.2f} أو أكثر من {upper:.2f}")
+    df_filtered['قيمة شاذة؟'] = np.where(flags, "⚠️ نعم", "لا")
+    df_for_model = df_filtered.loc[~flags].copy() if exclude_outliers else df_filtered.copy()
+else:
+    df_for_model = df_filtered.copy()
+
+# Forecast parameters with clear explanation
+st.subheader("أفق التنبؤ")
+m_last = int(df_filtered['Month '].dropna().max())
 default_from = m_last + 1
-default_to = max(default_from, m_last + 2)
+default_to = max(default_from + 1, m_last + 2)
 
-# Forecast range inputs
-st.subheader("نطاق التنبؤ")
 c3, c4 = st.columns(2)
 with c3:
     m_from = st.number_input(
-        "التنبؤ من (إزاحة الشهر)", 
-        min_value=0, 
-        value=default_from, 
+        "بداية الأفق (أشهر بعد آخر شهر مسجل، 1 = الشهر القادم)",
+        min_value=default_from,
+        value=default_from,
         step=1
     )
 with c4:
     m_to = st.number_input(
-        "التنبؤ إلى (إزاحة الشهر، شاملة)", 
-        min_value=int(m_from), 
-        value=int(max(default_to, m_from)), 
+        "نهاية الأفق (شامل)",
+        min_value=int(m_from),
+        value=int(max(default_to, m_from)),
         step=1
     )
+
+st.info(
+    "أفق التنبؤ = عدد الأشهر بعد **آخر شهر مسجل**.\n"
+    "أمثلة:\n"
+    "• 1 = الشهر القادم\n"
+    "• 2 = بعد شهرين\n"
+    "• 3 = بعد ثلاثة أشهر\n"
+    "هذه الإزاحات تُستخدم داخلياً، لكن النتائج ستُعرض بتسميات مقروءة."
+)
 
 # Run forecast
 run_forecast = st.button("تنفيذ التنبؤ", type="primary")
@@ -361,52 +424,73 @@ if run_forecast:
             img_path = img_tmp.name
         
         try:
-            # Run the regression analysis using existing reg_anal function
-            summary = reg_anal(df_filtered, [int(m_from), int(m_to)], img_path)
+            summary = reg_anal(df_for_model, [int(m_from), int(m_to)], img_path)
             
-            # Display results
-            st.subheader("النتائج")
+            # Display summary with Arabic labels and readable horizon labels
+            st.subheader("ملخص التحليل")
             
-            # Extract values for explanation
-            beta1 = float(summary.loc["Beta 1", "value"])
-            conf = summary.loc["95% Confidence Interval", "value"]
-            preds = summary.loc["Predicted Values", "value"]
+            # Extract key metrics
+            slope = summary.loc["Beta 1", "value"]
+            conf_int = summary.loc["95% Confidence Interval", "value"]
+            predictions = summary.loc["Predicted Values", "value"]
             pred_int = summary.loc["Prediction Interval", "value"]
             
-            # Parse predictions for individual months
-            try:
-                pred_list = eval(str(preds)) if isinstance(preds, str) else preds
-                pred1 = float(pred_list[0]) if len(pred_list) > 0 else 0
-                pred2 = float(pred_list[1]) if len(pred_list) > 1 else 0
-            except:
-                pred1 = pred2 = 0
+            # Determine trend direction
+            if slope > 0:
+                trend_word = "تصاعدي"
+            elif slope < 0:
+                trend_word = "تنازلي"
+            else:
+                trend_word = "ثابت"
             
-            # Parse prediction interval
-            try:
-                pi_parts = str(pred_int).replace('[', '').replace(']', '').split(',')
-                pi_low = float(pi_parts[0].strip())
-                pi_high = float(pi_parts[1].strip())
-            except:
-                pi_low = pi_high = 0
+            # Format prediction interval
+            pi_low, pi_high = pred_int[0], pred_int[1]
             
-            # Determine trend
-            trend_word = "ارتفاع" if beta1 > 0 else "انخفاض"
-            trend_arrow = "⬆️" if beta1 > 0 else "⬇️"
+            # Create readable horizon labels for predictions
+            h_labels = [horizon_label(i) for i in range(1, (m_to - m_last) + 1)]
+            preds = summary.loc["Predicted Values", "value"]
+            if isinstance(preds, str) and '[' in preds:
+                preds = eval(preds)
             
-            # Summary cards
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("الاتجاه العام", f"{trend_word} {trend_arrow}")
-            with col2:
-                st.metric("توقع الشهر القادم", fmt_num(pred1))
-            with col3:
-                st.metric("نطاق الثقة ٩٥٪ (إجمالي الفترة)", f"{fmt_num(pi_low)} – {fmt_num(pi_high)}")
+            readable_preds = ", ".join(f"{label}: {fmt_num(val)}" for label, val in zip(h_labels, preds))
             
-            # Arabic summary
-            st.info(
-                f"الخلاصة: الاتجاه **{trend_word}**. متوقع بيع {fmt_num(pred1)} وحدة في الشهر القادم، ثم {fmt_num(pred2)} وحدة بعده. "
-                f"نطاق الثقة ٩٥٪ لإجمالي الفترة: من {fmt_num(pi_low)} إلى {fmt_num(pi_high)}."
-            )
+            # Display key insights with clear structured format
+            # Extract individual predictions for clearer display
+            pred_values = preds if isinstance(preds, list) else [preds] if preds else []
+            
+            # Calculate duration
+            duration = m_to - m_from + 1
+            
+            # Determine trend in simple Arabic
+            trend_text = "تصاعدي" if slope > 0 else "تنازلي" if slope < 0 else "ثابت"
+            
+            # Build the formatted summary with clear sections
+            summary_lines = []
+            
+            # Section 1: Forecast Period Information
+            summary_lines.append(f"شهر البداية: {fmt_num(m_from)}")
+            summary_lines.append(f"شهر النهاية: {fmt_num(m_to)}")
+            summary_lines.append(f"المدة: {fmt_num(duration)} أشهر")
+            summary_lines.append("")  # Blank line for spacing
+            
+            # Section 2: Trend
+            summary_lines.append(f"الاتجاه: {trend_text}")
+            summary_lines.append("")  # Blank line for spacing
+            
+            # Section 3: Individual Forecasts
+            for i, (label, val) in enumerate(zip(h_labels, pred_values)):
+                # Use display mapping: start from 1 for next month
+                display_month = get_display_month(i)
+                # Handle singular vs plural for units
+                unit_text = "وحدة" if val == 1 else "وحدات"
+                summary_lines.append(f"توقع الشهر {fmt_num(display_month)}: {fmt_num(val)} {unit_text}")
+            
+            summary_lines.append("")  # Blank line for spacing
+            
+            # Section 4: Confidence Interval
+            summary_lines.append(f"نطاق الثقة 95% (إجمالي الفترة): من {fmt_num(pi_low)} إلى {fmt_num(pi_high)} وحدة")
+            
+            st.info("\n".join(summary_lines))
             
             # Optional advanced mode
             adv = st.toggle("وضع متقدّم", value=False)
@@ -426,6 +510,7 @@ if run_forecast:
                     except:
                         pass
                 st.table(translate_columns(summary_formatted))
+
             
             # Display visualization
             st.subheader("التصور")

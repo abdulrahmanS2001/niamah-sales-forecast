@@ -54,8 +54,9 @@ def reg_anal(df, pred_months, photo_name):
     alpha = 0.05
 
     # Obtaining upper and lower bounds for conf interval of the slope
-    slope_upper = pois_results.conf_int()[0].iloc[1]
-    slope_lower = pois_results.conf_int()[1].iloc[1]
+    conf = pois_results.conf_int()
+    slope_lower = conf.iloc[1, 0]  # lower bound
+    slope_upper = conf.iloc[1, 1]  # upper bound
 
     # Obtaining the prediction interval for next month
     pred_upper_map = lambda l : max(InvPois(alpha/2, l), InvPois(1-(alpha/2),l))
@@ -64,7 +65,8 @@ def reg_anal(df, pred_months, photo_name):
     pred_lower = sum(list(map(pred_lower_map,lambdas)))
 
     # Define the points of the line and plotting it
-    dom = list(range(5*(int(x.iloc[-1]/5)+1)+1))
+    last_x = int(x.max())
+    dom = list(range(0, max(last_x, pred_months[1]) + 1))
     rng = list(map(lambda x : exp(beta_0+beta_1*x), dom))
     plt.plot(dom,rng,color='red')
 
